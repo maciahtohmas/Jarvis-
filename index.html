@@ -50,6 +50,7 @@ ul{list-style:none;margin:0;padding:0;display:grid;gap:4px;font-size:.88rem}
 .you{color:var(--muted)}.you::before{content:"> "}
 .ai::before{content:"// ";color:var(--glow)}
 button{font:inherit;font-size:.8rem;letter-spacing:.12em;text-transform:uppercase;color:var(--bg);background:var(--glow);border:0;border-radius:4px;padding:9px 14px;cursor:pointer}
+select.ghost{font:inherit;font-size:.78rem;color:var(--glow);background:var(--glass);border:1px solid var(--line);border-radius:4px;padding:8px 10px;max-width:220px}
 button.ghost{background:transparent;color:var(--glow);border:1px solid var(--line)}
 button:focus-visible{outline:2px solid var(--text);outline-offset:2px}
 .hint{font-size:.76rem;color:var(--muted)}
@@ -79,6 +80,7 @@ button:focus-visible{outline:2px solid var(--text);outline-offset:2px}
     <button class="ghost" id="bgBtn">Background</button>
     <button class="ghost" id="bgReset" hidden>Default</button>
     <button class="ghost" id="full">Full screen</button>
+    <select id="voiceSel" class="ghost" aria-label="Jarvis voice"></select>
     <input type="file" id="bgFile" accept="image/*" hidden>
   </div>
   <div class="log" id="log"></div>
@@ -195,16 +197,26 @@ const logEl=document.getElementById('log'),statusEl=document.getElementById('sta
 function log(text,who){const p=document.createElement('div');p.className=who;p.textContent=text;logEl.appendChild(p);logEl.scrollTop=logEl.scrollHeight;}
 function setStatus(s){statusEl.textContent=s;}
 let voice=null;
-function pickVoice(){const v=speechSynthesis.getVoices();
-  voice=v.find(x=>/en-GB/i.test(x.lang)&&/male|daniel|george|arthur|ryan/i.test(x.name))||v.find(x=>/en-GB/i.test(x.lang))||v.find(x=>/^en/i.test(x.lang))||null;}
+/* Calm British male voice by default; viewer can pick another, remembered on this device */
+const PREFER=[/Google UK English Male/i,/Daniel/i,/George/i,/Arthur/i,/Ryan/i,/en-GB.*male/i,/Google UK English/i];
+function pickVoice(){
+  const all=speechSynthesis.getVoices().filter(x=>/^en/i.test(x.lang));if(!all.length)return;
+  const saved=load('deck.voice',null);
+  voice=all.find(x=>x.name===saved)||null;
+  if(!voice)for(const re of PREFER){voice=all.find(x=>re.test(x.name)||re.test(x.name+' '+x.lang));if(voice)break;}
+  if(!voice)voice=all.find(x=>/en-GB/i.test(x.lang))||all[0];
+  const sel=document.getElementById('voiceSel');sel.innerHTML='';
+  all.forEach(x=>{const o=document.createElement('option');o.value=x.name;o.textContent=x.name.replace(/^Google /,'');if(x===voice)o.selected=true;sel.appendChild(o);});
+}
 speechSynthesis.onvoiceschanged=pickVoice;pickVoice();
+document.getElementById('voiceSel').onchange=e=>{voice=speechSynthesis.getVoices().find(x=>x.name===e.target.value)||voice;save('deck.voice',voice.name);say('Voice updated. How does this sound, Maciah?');};
 let rec=null,listening=false,speaking=false,pending='',silenceTimer=null;
 function say(text){
   log(text,'ai');pending='';clearTimeout(silenceTimer);silenceTimer=null;
-  const u=new SpeechSynthesisUtterance(text);if(voice)u.voice=voice;u.rate=1;u.pitch=0.9;
+  const u=new SpeechSynthesisUtterance(text);if(voice)u.voice=voice;u.rate=0.92;u.pitch=0.82;u.volume=0.95;
   if(listening&&rec)rec.abort();speaking=true;mode='speaking';
   u.onend=u.onerror=()=>{speaking=false;mode=listening?'listening':'idle';if(listening)startRec();};
-  speechSynthesis.speak(u);
+  speechSynthesis.cancel();speechSynthesis.speak(u);
 }
 function beep(){try{const a=new AudioContext(),o=a.createOscillator(),g=a.createGain();o.connect(g);g.connect(a.destination);
   o.frequency.value=880;g.gain.value=0;o.start();[0,0.25,0.5].forEach(t=>{g.gain.setValueAtTime(0.25,a.currentTime+t);g.gain.setValueAtTime(0,a.currentTime+t+0.15);});o.stop(a.currentTime+0.8);}catch(e){}}
