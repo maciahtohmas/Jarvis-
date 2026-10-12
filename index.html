@@ -369,8 +369,7 @@ function handle(raw,fromRemote){
   // Music: open the top YouTube result
   let m=q.match(/\bplay\s+(.+)/)||q.match(/(?:put on|listen to)\s+(.+)/);
   if(m){const what=m[1].replace(/\s*(on|from)\s+youtube\s*$/,'').replace(/^(the song|song|some)\s+/,'');
-    say('Playing '+what+'.');
-    openSite('https://www.google.com/search?btnI=1&q='+encodeURIComponent('site:youtube.com/watch '+what),'YouTube');return;}
+    playVideo(what);return;}
 
   m=q.match(/(?:search for|search|google|look up)\s+(.+)/);
   if(m){say('Searching for '+m[1]+'.');openSite('https://www.google.com/search?q='+encodeURIComponent(m[1]),'search');return;}
@@ -398,6 +397,30 @@ async function lookup(raw){
   linksEl.innerHTML='';const a=document.createElement('a');a.href='https://www.google.com/search?q='+encodeURIComponent(raw);
   a.target='_blank';a.rel='noopener';a.textContent='More results for "'+raw+'"';linksEl.appendChild(a);
   if(listening)setStatus('Listening for "Jarvis"');
+}
+
+/* ================= YouTube: find the top video, then open it in the YouTube app ================= */
+const YT_KEY='AIzaSyAOR58tpIDdba6tKGFPngxT7kWI2t9CdBg';
+function decodeHtml(t){const e=document.createElement('textarea');e.innerHTML=t;return e.value;}
+async function topVideo(q){
+  const j=await fetch('https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=1&q='+encodeURIComponent(q)+'&key='+YT_KEY).then(r=>r.json());
+  if(j.error)throw new Error(j.error.message||'YouTube error');
+  const it=j.items&&j.items[0];return it?{id:it.id.videoId,title:decodeHtml(it.snippet.title)}:null;}
+async function playVideo(what){
+  mode='thinking';setStatus('Finding '+what);
+  let v=null,err=null;
+  try{v=await topVideo(what);}catch(e){err=e.message;}
+  if(listening)setStatus('Listening for "Jarvis"');
+  if(!v){
+    if(err)log('YouTube lookup failed: '+err,'ai');
+    say('Playing '+what+'.');
+    openSite('https://www.google.com/search?btnI=1&q='+encodeURIComponent('site:youtube.com/watch '+what),'YouTube');return;}
+  say('Playing '+v.title.replace(/\s*\((official|lyric|music)[^)]*\)/ig,'').replace(/\s*\[[^\]]*\]/g,'')+'.');
+  const web='https://www.youtube.com/watch?v='+v.id;
+  lastLink={url:web,label:v.title};
+  if(ME==='phone'){window.location.href='youtube://www.youtube.com/watch?v='+v.id;
+    linksEl.innerHTML='';const a=document.createElement('a');a.href=web;a.target='_blank';a.rel='noopener';a.textContent='Open "'+v.title+'" in Safari instead';linksEl.appendChild(a);}
+  else openSite(web,v.title);
 }
 
 /* ================= Device link (Firebase, see module script below) ================= */
