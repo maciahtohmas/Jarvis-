@@ -58,6 +58,8 @@ button:focus-visible{outline:2px solid var(--text);outline-offset:2px}
 .pair{display:grid;gap:8px;border-top:1px solid var(--line);padding-top:10px}
 .pair .code{font-family:var(--display);font-size:1.6rem;letter-spacing:.18em;color:var(--glow)}
 .pair input{font:inherit;font-size:.9rem;letter-spacing:.12em;text-transform:uppercase;color:var(--text);background:transparent;border:1px solid var(--line);border-radius:4px;padding:8px 10px;width:11em;min-width:0}
+.clip{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.clip div{min-width:0;overflow-wrap:anywhere;color:var(--text)}
 .hint{font-size:.76rem;color:var(--muted)}
 .links a{color:var(--glow)}
 @media (max-width:760px){.board{display:none}}
@@ -73,6 +75,7 @@ button:focus-visible{outline:2px solid var(--text);outline-offset:2px}
   <div class="panel"><h2>WEATHER</h2>
     <div class="wx"><span class="temp" id="wxTemp">--°</span><span class="desc" id="wxDesc">Loading…</span></div>
     <div class="small" id="wxRange"></div>
+    <div class="small" id="battLine"></div>
   </div>
   <div class="panel"><h2>TIMERS &amp; REMINDERS</h2><ul id="timerList"></ul></div>
   <div class="panel"><h2>NOTES</h2><ul id="noteList"></ul></div>
@@ -320,7 +323,18 @@ function handle(raw,fromRemote){
   const q=raw.toLowerCase().replace(/[.!?]+$/,'').trim();log(fromRemote?raw+'  (from your '+fromRemote+')':raw,'you');linksEl.innerHTML='';
   if(!fromRemote){
     if(/^(pair|link)( my)? (phone|chromebook|devices?)|pairing code|link code/.test(q)){openPair();say(room?'Your devices are linked. The code is on screen.':'The pairing panel is open on screen.');return;}
-    let r=q.match(new RegExp('^send (?:that|this|it) to (?:my|the) '+DEV+'$'));
+    let r=q.match(new RegExp('^(?:find|ring|where(?:\'s| is)) (?:my|the) '+DEV+'$'));
+    if(r){const to=devName(r[1]);if(to===ME){say('You are holding it, I believe.');return;}
+      sendTo(to,{type:'ring'},'Ringing your '+to+'. Tap its screen to stop.');return;}
+    r=q.match(new RegExp('^send (?:my |the )?clipboard to (?:my|the) '+DEV+'$'));
+    if(r){const to=devName(r[1]);if(to===ME){say('That is this device.');return;}
+      readClip().then(t=>{if(!t){say('Your clipboard is empty, or I am not allowed to read it. Click inside Jarvis once and try again.');return;}
+        sendTo(to,{type:'clip',text:t.slice(0,5000)},'Clipboard sent to your '+to+'.');});return;}
+    r=q.match(new RegExp('^send (?:a )?(?:note|message|text) to (?:my|the) '+DEV+'(?: saying| that)?[:,]? (.+)$'));
+    if(r){const to=devName(r[1]);sendTo(to,{type:'clip',text:raw.replace(/^.*?(saying|that)[:,]?\s+/i,'')},'Sent to your '+to+'.');return;}
+    r=q.match(new RegExp('battery.*(?:my|the) '+DEV+'|(?:my|the) '+DEV+'.*battery'));
+    if(r){const to=devName(r[1]||r[2]);if(to!==ME){sendTo(to,{type:'battery?'},'Checking your '+to+'.');return;}}
+    r=q.match(new RegExp('^send (?:that|this|it) to (?:my|the) '+DEV+'$'));
     if(r){const to=devName(r[1]);if(to===ME){say('That is this device.');return;}
       if(!lastLink){say('I have nothing to send yet.');return;}
       sendTo(to,{type:'open',url:lastLink.url,label:lastLink.label},'Sent '+lastLink.label+' to your '+to+'.');return;}
@@ -332,8 +346,11 @@ function handle(raw,fromRemote){
   if(confirmClear>Date.now()){confirmClear=0;
     if(/^(yes|yeah|yep|confirm|do it|sure)/.test(q)){notes=[];persistNotes();renderNotes();say('All notes erased.');}else say('Okay, keeping your notes.');return;}
   if(/stop listening|go to sleep|goodbye/.test(q)){say('Going quiet. Press start when you need me.');setTimeout(stopAll,50);return;}
-  if(/what can you do|\bhelp\b|commands/.test(q)){say('I can tell the time and weather, play music, send things between your phone and Chromebook, search the web, open your sites, set timers and reminders, take notes, and give you a briefing.');return;}
+  if(/what can you do|\bhelp\b|commands/.test(q)){say('I can tell the time and weather, play music, send things between your phone and Chromebook, find either device, share your clipboard, check the battery, start work mode, search the web, open your sites, set timers and reminders, take notes, and give you a briefing.');return;}
   if(/briefing|status report|catch me up/.test(q)){briefing();return;}
+  if(/battery|power level|how much charge/.test(q)){batterySentence().then(say);return;}
+  if(/^(start |open |begin )?(work|working) mode|^let'?s (get to )?work|^open my work( stuff| tabs)?/.test(q)){workMode();return;}
+  if(/^(stop|silence|quiet|never ?mind|cancel|shush)( ringing| the alarm| that| talking)?$/.test(q)){if(ringing){stopRing();say('Silenced.');}else{speechSynthesis.cancel();}return;}
   if(/reset (the )?background|default background/.test(q)){resetBg();say('Background reset.');return;}
   if(/weather|temperature|outside|\brain\b/.test(q)){mode='thinking';loadWeather().then(()=>say(weatherSentence()));return;}
 
@@ -423,6 +440,51 @@ async function playVideo(what){
   else openSite(web,v.title);
 }
 
+/* ================= Battery ================= */
+let batt=null;
+async function initBattery(){try{if(!navigator.getBattery)return;batt=await navigator.getBattery();
+  const upd=()=>{document.getElementById('battLine').textContent='Battery '+Math.round(batt.level*100)+'%'+(batt.charging?' · charging':'');};
+  batt.addEventListener('levelchange',upd);batt.addEventListener('chargingchange',upd);upd();}catch(e){}}
+initBattery();
+async function batterySentence(){
+  if(!batt)return 'This device does not share its battery level with web apps.';
+  const pct=Math.round(batt.level*100);let t='Battery is at '+pct+' percent';
+  if(batt.charging)t+=' and charging'+(batt.chargingTime&&isFinite(batt.chargingTime)?', full in about '+Math.max(1,Math.round(batt.chargingTime/60))+' minutes':'');
+  else if(batt.dischargingTime&&isFinite(batt.dischargingTime)){const h=batt.dischargingTime/3600;t+=', roughly '+(h>=1?Math.floor(h)+' hours':Math.max(1,Math.round(h*60))+' minutes')+' left';}
+  return t+'.'+(pct<=15&&!batt.charging?' I would plug in soon.':'');}
+
+/* ================= Work mode: open the usual tabs ================= */
+const WORK=load('deck.work',[
+  ['your game','https://samuraivengeance.com'],['Netlify','https://app.netlify.com'],
+  ['AdSense','https://adsense.google.com'],['GitHub','https://github.com/maciahtohmas'],['Search Console','https://search.google.com/search-console']]);
+function workMode(){say('Work mode. Opening '+WORK.map(w=>w[0]).join(', ').replace(/, ([^,]*)$/,' and $1')+'.');
+  let blocked=false;WORK.forEach(([label,url],i)=>{const w=window.open(url,'_blank');if(!w)blocked=true;});
+  if(blocked){linksEl.innerHTML='';WORK.forEach(([label,url])=>{const a=document.createElement('a');a.href=url;a.target='_blank';a.rel='noopener';a.textContent=label;a.style.marginRight='12px';linksEl.appendChild(a);});}}
+
+/* ================= Clipboard between devices ================= */
+async function readClip(){try{return (await navigator.clipboard.readText())||'';}catch(e){return '';}}
+function showClip(text,from){
+  linksEl.innerHTML='';const box=document.createElement('div');box.className='clip';
+  const t=document.createElement('div');t.textContent=text;const b=document.createElement('button');b.className='ghost';b.textContent='Copy';
+  b.onclick=()=>{navigator.clipboard.writeText(text).then(()=>{b.textContent='Copied';}).catch(()=>{const r=document.createRange();r.selectNodeContents(t);const sel=getSelection();sel.removeAllRanges();sel.addRange(r);b.textContent='Selected, press copy';});};
+  const u=/^https?:\/\/\S+$/.test(text.trim());
+  box.append(t,b);if(u){const a=document.createElement('a');a.href=text.trim();a.target='_blank';a.rel='noopener';a.textContent='Open link';box.appendChild(a);}
+  linksEl.appendChild(box);say('Received '+(u?'a link':'some text')+' from your '+from+'. Tap copy to keep it.');}
+
+/* ================= Find my device: loud ringing until tapped ================= */
+let actx=null,ringing=null;
+function audio(){try{if(!actx)actx=new (window.AudioContext||window.webkitAudioContext)();if(actx.state==='suspended')actx.resume();}catch(e){}return actx;}
+addEventListener('pointerdown',()=>{audio();if(ringing)stopRing();},true);
+function ring(from){
+  const a=audio();if(!a){say('Your '+from+' is looking for me.');return;}
+  stopRing();const g=a.createGain();g.gain.value=0;g.connect(a.destination);
+  const o=a.createOscillator();o.type='square';o.connect(g);o.start();
+  let n=0;ringing={o,g,iv:setInterval(()=>{const t=a.currentTime;o.frequency.setValueAtTime(n%2?988:1319,t);
+    g.gain.setValueAtTime(0.6,t);g.gain.setValueAtTime(0,t+0.35);n++;if(n>60)stopRing();},450)};
+  log('Your '+from+' is looking for this device. Tap anywhere to stop.','ai');
+  if(navigator.vibrate)navigator.vibrate([400,200,400,200,400]);}
+function stopRing(){if(!ringing)return;clearInterval(ringing.iv);try{ringing.o.stop();}catch(e){}ringing=null;}
+
 /* ================= Device link (Firebase, see module script below) ================= */
 let room=load('deck.room',null);
 function openPair(){document.getElementById('pairBox').hidden=false;renderPair();}
@@ -437,6 +499,10 @@ function sendTo(to,payload,ok){
 function runRemote(ev){
   if(ev.type==='open'){say('Opening '+(ev.label||'link')+' from your '+ev.from+'.');openSite(ev.url,ev.label||'link');}
   else if(ev.type==='cmd'){handle(ev.text,ev.from);}
+  else if(ev.type==='ring'){ring(ev.from);}
+  else if(ev.type==='clip'){showClip(ev.text,ev.from);}
+  else if(ev.type==='battery?'){batterySentence().then(t=>window.syncSend&&window.syncSend(ev.from,{type:'say',text:'Your '+ME+' says: '+t}));}
+  else if(ev.type==='say'){say(ev.text);}
 }
 document.getElementById('pairBtn').onclick=()=>{const b=document.getElementById('pairBox');b.hidden=!b.hidden;renderPair();};
 document.getElementById('pairNew').onclick=()=>{const A='ABCDEFGHJKMNPQRSTUVWXYZ23456789';let c='';const r=crypto.getRandomValues(new Uint32Array(10));
