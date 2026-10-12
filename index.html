@@ -53,6 +53,8 @@ button{font:inherit;font-size:.8rem;letter-spacing:.12em;text-transform:uppercas
 select.ghost{font:inherit;font-size:.78rem;color:var(--glow);background:var(--glass);border:1px solid var(--line);border-radius:4px;padding:8px 10px;max-width:220px}
 button.ghost{background:transparent;color:var(--glow);border:1px solid var(--line)}
 button:focus-visible{outline:2px solid var(--text);outline-offset:2px}
+.brain{font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:4px 10px}
+.brain.on{color:var(--glow);border-color:var(--glow)}
 .hint{font-size:.76rem;color:var(--muted)}
 .links a{color:var(--glow)}
 @media (max-width:760px){.board{display:none}}
@@ -76,6 +78,7 @@ button:focus-visible{outline:2px solid var(--text);outline-offset:2px}
 <div class="console">
   <div class="row">
     <div class="status" id="status">Standby</div>
+    <span class="brain" id="brainState">Brain offline</span>
     <button id="start">Start assistant</button>
     <button class="ghost" id="bgBtn">Background</button>
     <button class="ghost" id="bgReset" hidden>Default</button>
@@ -85,7 +88,7 @@ button:focus-visible{outline:2px solid var(--text);outline-offset:2px}
   </div>
   <div class="log" id="log"></div>
   <div class="links" id="links"></div>
-  <div class="hint">Say "Jarvis" first. Try: "what's the weather", "play a song", "set a timer for 5 minutes", "take a note…", "briefing", "what can you do".</div>
+  <div class="hint">Say "Jarvis" first. Try: "what's the weather", "play a song", "set a timer for 5 minutes", "take a note…", "briefing", or just ask a question.</div>
 </div>
 
 <script>
@@ -211,13 +214,20 @@ function pickVoice(){
 speechSynthesis.onvoiceschanged=pickVoice;pickVoice();
 document.getElementById('voiceSel').onchange=e=>{voice=speechSynthesis.getVoices().find(x=>x.name===e.target.value)||voice;save('deck.voice',voice.name);say('Voice updated. How does this sound, Maciah?');};
 let rec=null,listening=false,speaking=false,pending='',silenceTimer=null;
+function mkUtt(text){const u=new SpeechSynthesisUtterance(text);if(voice)u.voice=voice;u.rate=0.92;u.pitch=0.82;u.volume=0.95;return u;}
 function say(text){
   log(text,'ai');pending='';clearTimeout(silenceTimer);silenceTimer=null;
-  const u=new SpeechSynthesisUtterance(text);if(voice)u.voice=voice;u.rate=0.92;u.pitch=0.82;u.volume=0.95;
+  const u=mkUtt(text);
   if(listening&&rec)rec.abort();speaking=true;mode='speaking';
   u.onend=u.onerror=()=>{speaking=false;mode=listening?'listening':'idle';if(listening)startRec();};
   speechSynthesis.cancel();speechSynthesis.speak(u);
 }
+/* Streaming speech: speak each sentence as soon as the brain finishes it */
+let qLeft=0,streamDone=true;
+function startSpeaking(){pending='';clearTimeout(silenceTimer);silenceTimer=null;if(listening&&rec)rec.abort();speechSynthesis.cancel();speaking=true;mode='speaking';streamDone=false;qLeft=0;}
+function queueSpeak(t){t=t.replace(/[*_#`>]/g,'').trim();if(!t)return;qLeft++;const u=mkUtt(t);u.onend=u.onerror=()=>{qLeft--;maybeDone();};speechSynthesis.speak(u);}
+function finishSpeaking(){streamDone=true;maybeDone();}
+function maybeDone(){if(streamDone&&qLeft<=0&&speaking){speaking=false;mode=listening?'listening':'idle';if(listening)startRec();}}
 function beep(){try{const a=new AudioContext(),o=a.createOscillator(),g=a.createGain();o.connect(g);g.connect(a.destination);
   o.frequency.value=880;g.gain.value=0;o.start();[0,0.25,0.5].forEach(t=>{g.gain.setValueAtTime(0.25,a.currentTime+t);g.gain.setValueAtTime(0,a.currentTime+t+0.15);});o.stop(a.currentTime+0.8);}catch(e){}}
 function openSite(url,label){const w=window.open(url,'_blank');
@@ -298,7 +308,7 @@ function handle(raw){
   if(confirmClear>Date.now()){confirmClear=0;
     if(/^(yes|yeah|yep|confirm|do it|sure)/.test(q)){notes=[];save('deck.notes',notes);renderNotes();say('All notes erased.');}else say('Okay, keeping your notes.');return;}
   if(/stop listening|go to sleep|goodbye/.test(q)){say('Going quiet. Press start when you need me.');setTimeout(stopAll,50);return;}
-  if(/what can you do|\bhelp\b|commands/.test(q)){say('I can tell the time and weather, play music, search the web, open your sites, set timers and reminders, take notes, and give you a briefing.');return;}
+  if(/what can you do|\bhelp\b|commands/.test(q)){say('I can tell the time and weather, play music, search the web, open your sites, set timers and reminders, take notes, give you a briefing, and when my brain is online, simply talk things through with you.');return;}
   if(/briefing|status report|catch me up/.test(q)){briefing();return;}
   if(/reset (the )?background|default background/.test(q)){resetBg();say('Background reset.');return;}
   if(/weather|temperature|outside|\brain\b/.test(q)){mode='thinking';loadWeather().then(()=>say(weatherSentence()));return;}
@@ -346,25 +356,82 @@ function handle(raw){
   if(/^(hello|hi|hey|are you there)\b/.test(q)){say('Online and listening, Maciah.');return;}
   if(/who are you|your name/.test(q)){say('I am your command deck assistant.');return;}
   if(/full ?screen/.test(q)){goFull();say('Full screen.');return;}
+  if(/(new|fresh|reset the) conversation|forget (that|our conversation)/.test(q)){chat=[];say('Conversation cleared.');return;}
+  if(/(bigger|smarter) brain/.test(q)){const big=brainModels.find(n=>/3b/.test(n));
+    if(big){brainModel=big;save('deck.model',big);renderBrain();say('Switched to the smarter brain. Answers will take a little longer.');}
+    else say('The smarter brain is not installed yet. In the Linux terminal, run: ollama pull llama 3.2, 3 b.');return;}
+  if(/(faster|smaller|quick) brain/.test(q)){const sm=brainModels.find(n=>/1b/.test(n));
+    if(sm){brainModel=sm;save('deck.model',sm);renderBrain();say('Switched to the faster brain.');}else say('The fast brain is not installed.');return;}
+  if(/brain status|is (your|the) brain (on|online|working)/.test(q)){checkBrain().then(on=>say(on?'My brain is online, running '+brainModel+'.':'My brain is offline. Make sure Linux is running.'));return;}
   lookup(raw);
 }
 let noteNext=false;
 
-/* General questions: Wikipedia summary, with a Google link as backup */
-async function lookup(raw){
-  const topic=raw.replace(/^(what|who|where|when|why|how)( is| are| was| were| did| does| do)?( a| an| the)?\s+/i,'').replace(/\?$/,'');
-  mode='thinking';setStatus('Searching');
+/* ================= Local AI brain (Ollama on the Linux side) ================= */
+const BRAIN_URL='http://localhost:11434';
+let brainModel=load('deck.model','llama3.2:1b'),brainOnline=false,brainModels=[],chat=[];
+async function checkBrain(){
+  try{const ctl=new AbortController();setTimeout(()=>ctl.abort(),3000);
+    const j=await fetch(BRAIN_URL+'/api/tags',{signal:ctl.signal}).then(r=>r.json());
+    brainModels=(j.models||[]).map(m=>m.name);brainOnline=brainModels.length>0;
+    if(brainOnline&&!brainModels.includes(brainModel))brainModel=brainModels.find(n=>/1b/.test(n))||brainModels[0];
+  }catch(e){brainOnline=false;}
+  renderBrain();return brainOnline;}
+function renderBrain(){const el=document.getElementById('brainState');el.textContent=brainOnline?'Brain online · '+brainModel:'Brain offline';el.classList.toggle('on',brainOnline);}
+
+async function askBrain(raw){
+  mode='thinking';setStatus('Thinking');
+  const now=new Date();
+  const sys='You are Jarvis, the personal assistant of Maciah, running on his Chromebook. You are calm, polite and quietly witty, with the manners of a composed British butler. '+
+    'Answer in one to three short sentences meant to be spoken aloud. Never use lists, markdown or emojis. If you are not sure of a fact, say so plainly instead of guessing. '+
+    'Today is '+now.toLocaleDateString([], {weekday:'long',month:'long',day:'numeric',year:'numeric'})+' and the time is '+fmtTime(now)+'.'+
+    (wx?' The weather outside is '+wx.temp+' degrees Fahrenheit and '+wx.desc+'.':'');
+  chat.push({role:'user',content:raw});chat=chat.slice(-8);
+  const p=document.createElement('div');p.className='ai';logEl.appendChild(p);
+  let full='',buf='',started=false;
+  try{
+    const r=await fetch(BRAIN_URL+'/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model:brainModel,stream:true,keep_alive:'30m',options:{num_predict:160,temperature:0.6},messages:[{role:'system',content:sys},...chat]})});
+    if(!r.ok)throw new Error('status '+r.status);
+    const rd=r.body.getReader(),dec=new TextDecoder();let rest='';
+    for(;;){const {done,value}=await rd.read();if(done)break;
+      rest+=dec.decode(value,{stream:true});const lines=rest.split('\n');rest=lines.pop();
+      for(const ln of lines){if(!ln.trim())continue;const j=JSON.parse(ln);const t=(j.message&&j.message.content)||'';
+        full+=t;buf+=t;p.textContent=full;logEl.scrollTop=logEl.scrollHeight;
+        let m;while((m=buf.match(/^([\s\S]*?[.!?])\s+([\s\S]*)$/))){if(!started){startSpeaking();started=true;}queueSpeak(m[1]);buf=m[2];}
+      }}
+    if(buf.trim()){if(!started){startSpeaking();started=true;}queueSpeak(buf);}
+    if(!full.trim()){p.remove();chat.pop();mode=listening?'listening':'idle';say('I am afraid I have nothing useful on that one.');return true;}
+    finishSpeaking();chat.push({role:'assistant',content:full});
+    if(listening)setStatus('Listening for "Jarvis"');
+    return true;
+  }catch(e){p.remove();chat.pop();if(started)finishSpeaking();brainOnline=false;renderBrain();return false;}
+}
+
+/* Wikipedia summary for short factual questions */
+async function wiki(raw){
+  const topic=raw.replace(/^(what|who|where|when|why|how)('s| is| are| was| were| did| does| do)?( a| an| the)?\s+/i,'').replace(/\?$/,'');
   try{
     const s=await fetch('https://en.wikipedia.org/w/api.php?action=query&list=search&srlimit=1&format=json&origin=*&srsearch='+encodeURIComponent(topic)).then(r=>r.json());
-    const hit=s.query&&s.query.search&&s.query.search[0];if(!hit)throw 0;
+    const hit=s.query&&s.query.search&&s.query.search[0];if(!hit)return null;
     const sum=await fetch('https://en.wikipedia.org/api/rest_v1/page/summary/'+encodeURIComponent(hit.title)).then(r=>r.json());
-    const text=(sum.extract||'').split(/(?<=\.)\s+/).slice(0,2).join(' ');if(!text)throw 0;
-    say(text);
-  }catch(e){say('I could not find a quick answer. Here is a web search.');}
-  linksEl.innerHTML='';const a=document.createElement('a');a.href='https://www.google.com/search?q='+encodeURIComponent(raw);
-  a.target='_blank';a.rel='noopener';a.textContent='More results for "'+raw+'"';linksEl.appendChild(a);
-  if(listening)setStatus('Listening for "Jarvis"');
+    return (sum.extract||'').split(/(?<=\.)\s+/).slice(0,2).join(' ')||null;
+  }catch(e){return null;}
 }
+
+/* Questions without a built-in command: facts go to Wikipedia, everything else to the brain */
+async function lookup(raw){
+  const factual=/^(who|what|where|when)('s|\s+(is|are|was|were))\b/i.test(raw)&&raw.split(/\s+/).length<=8;
+  let answered=false;
+  if(!factual&&brainOnline)answered=await askBrain(raw);
+  if(!answered){mode='thinking';setStatus('Searching');const t=await wiki(raw);if(t){say(t);answered=true;}}
+  if(!answered&&brainOnline)answered=await askBrain(raw);
+  if(!answered)say('I could not find a quick answer. Here is a web search.');
+  linksEl.innerHTML='';const a=document.createElement('a');a.href='https://www.google.com/search?q='+encodeURIComponent(raw);
+  a.target='_blank';a.rel='noopener';a.textContent='Search the web for "'+raw+'"';linksEl.appendChild(a);
+  if(listening&&!speaking)setStatus('Listening for "Jarvis"');
+}
+checkBrain();setInterval(checkBrain,60000);
 
 /* ================= Voice input with wake word ================= */
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
