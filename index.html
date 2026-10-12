@@ -117,7 +117,10 @@ function setBg(url){if(!url){bgImg=null;document.getElementById('bgReset').hidde
 try{setBg(localStorage.getItem('deck.bg'));}catch(e){}
 
 let level=0,t0=performance.now();
+let lastDraw=0;
 function frame(now){
+  if(mode==='thinking'&&now-lastDraw<250){requestAnimationFrame(frame);return;}
+  lastDraw=now;
   const dt=Math.min(50,now-t0);t0=now;
   // base: deep teal haze
   if(bgImg){const s=Math.max(W/bgImg.width,H/bgImg.height),iw=bgImg.width*s,ih=bgImg.height*s;
@@ -369,6 +372,7 @@ let noteNext=false;
 
 /* ================= Local AI brain (Ollama on the Linux side) ================= */
 const BRAIN_URL='http://localhost:11434';
+let warmed=false;
 let brainModel=load('deck.model','llama3.2:1b'),brainOnline=false,brainModels=[],chat=[];
 async function checkBrain(){
   try{const ctl=new AbortController();setTimeout(()=>ctl.abort(),3000);
@@ -376,6 +380,7 @@ async function checkBrain(){
     brainModels=(j.models||[]).map(m=>m.name);brainOnline=brainModels.length>0;
     if(brainOnline&&!brainModels.includes(brainModel))brainModel=brainModels.find(n=>/1b/.test(n))||brainModels[0];
   }catch(e){brainOnline=false;}
+  if(brainOnline&&!warmed){warmed=true;fetch(BRAIN_URL+'/api/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:brainModel,prompt:'',keep_alive:'30m'})}).catch(()=>{});}
   renderBrain();return brainOnline;}
 function renderBrain(){const el=document.getElementById('brainState');el.textContent=brainOnline?'Brain online · '+brainModel:'Brain offline';el.classList.toggle('on',brainOnline);}
 
@@ -386,21 +391,21 @@ async function askBrain(raw){
     'Answer in one to three short sentences meant to be spoken aloud. Never use lists, markdown or emojis. If you are not sure of a fact, say so plainly instead of guessing. '+
     'Today is '+now.toLocaleDateString([], {weekday:'long',month:'long',day:'numeric',year:'numeric'})+' and the time is '+fmtTime(now)+'.'+
     (wx?' The weather outside is '+wx.temp+' degrees Fahrenheit and '+wx.desc+'.':'');
-  chat.push({role:'user',content:raw});chat=chat.slice(-8);
+  chat.push({role:'user',content:raw});chat=chat.slice(-4);
   const p=document.createElement('div');p.className='ai';logEl.appendChild(p);
   let full='',buf='',started=false;
   try{
     const r=await fetch(BRAIN_URL+'/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({model:brainModel,stream:true,keep_alive:'30m',options:{num_predict:160,temperature:0.6},messages:[{role:'system',content:sys},...chat]})});
+      body:JSON.stringify({model:brainModel,stream:true,keep_alive:'30m',options:{num_predict:110,num_ctx:1024,temperature:0.6},messages:[{role:'system',content:sys},...chat]})});
     if(!r.ok)throw new Error('status '+r.status);
     const rd=r.body.getReader(),dec=new TextDecoder();let rest='';
     for(;;){const {done,value}=await rd.read();if(done)break;
       rest+=dec.decode(value,{stream:true});const lines=rest.split('\n');rest=lines.pop();
       for(const ln of lines){if(!ln.trim())continue;const j=JSON.parse(ln);const t=(j.message&&j.message.content)||'';
         full+=t;buf+=t;p.textContent=full;logEl.scrollTop=logEl.scrollHeight;
-        let m;while((m=buf.match(/^([\s\S]*?[.!?])\s+([\s\S]*)$/))){if(!started){startSpeaking();started=true;}queueSpeak(m[1]);buf=m[2];}
+        
       }}
-    if(buf.trim()){if(!started){startSpeaking();started=true;}queueSpeak(buf);}
+    if(full.trim()){startSpeaking();started=true;queueSpeak(full);}
     if(!full.trim()){p.remove();chat.pop();mode=listening?'listening':'idle';say('I am afraid I have nothing useful on that one.');return true;}
     finishSpeaking();chat.push({role:'assistant',content:full});
     if(listening)setStatus('Listening for "Jarvis"');
