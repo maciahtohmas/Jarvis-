@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Maciah Command Deck</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#03161a">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@500;700&display=swap">
+<style>
+/* Layout: full-screen canvas scene (teal haze, drifting bokeh, floating orb that is Jarvis);
+   clock top-left; status board (weather, timers, notes) top-right; command console bottom-center. */
+:root{
+  --bg:#03161a;          /* deep teal-black */
+  --glow:#4fe3ff;        /* cyan light: orb, accents */
+  --warm:#ffb547;        /* timers and alerts */
+  --text:#d9f7ff;
+  --muted:#7fa9b4;
+  --glass:rgba(3,22,28,.72);
+  --line:rgba(79,227,255,.28);
+  --mono:"Share Tech Mono",ui-monospace,"DejaVu Sans Mono",monospace;
+  --display:"Orbitron","Share Tech Mono",ui-monospace,monospace;
+  color-scheme:dark;
+}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:var(--mono);overflow:hidden}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+.clock{position:fixed;top:24px;left:28px;text-shadow:0 0 16px rgba(79,227,255,.55)}
+.clock .t{font-family:var(--display);font-size:clamp(2.2rem,6vw,4.4rem);font-weight:700;color:var(--glow);letter-spacing:.06em}
+.clock .d{font-size:.9rem;text-transform:uppercase;letter-spacing:.22em;opacity:.85}
+.board{position:fixed;top:24px;right:24px;width:min(300px,calc(100% - 48px));display:grid;gap:10px}
+.panel{background:var(--glass);border:1px solid var(--line);border-radius:8px;padding:12px 14px;backdrop-filter:blur(6px)}
+.panel h2{margin:0 0 6px;font-family:var(--display);font-size:.7rem;letter-spacing:.25em;color:var(--muted);font-weight:500}
+.wx{display:flex;align-items:baseline;gap:10px}
+.wx .temp{font-family:var(--display);font-size:1.8rem;color:var(--glow)}
+.wx .desc{font-size:.9rem}
+.small{font-size:.8rem;color:var(--muted)}
+ul{list-style:none;margin:0;padding:0;display:grid;gap:4px;font-size:.88rem}
+.timer{display:flex;justify-content:space-between;gap:8px}
+.timer b{color:var(--warm);font-weight:400;font-variant-numeric:tabular-nums}
+.timer span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.console{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);width:min(680px,calc(100% - 32px));
+  background:var(--glass);border:1px solid var(--line);border-radius:8px;padding:14px 16px;backdrop-filter:blur(6px);display:grid;gap:10px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.status{font-size:.8rem;letter-spacing:.2em;text-transform:uppercase;color:var(--glow);flex:1;min-width:0}
+.status::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:#1d4550;margin-right:8px;vertical-align:middle}
+.status.on::before{background:var(--glow);box-shadow:0 0 10px var(--glow);animation:blink 1.2s infinite}
+@keyframes blink{50%{opacity:.3}}
+.log{max-height:8em;overflow-y:auto;font-size:.95rem;line-height:1.5;display:grid;gap:2px}
+.you{color:var(--muted)}.you::before{content:"> "}
+.ai::before{content:"// ";color:var(--glow)}
+button{font:inherit;font-size:.8rem;letter-spacing:.12em;text-transform:uppercase;color:var(--bg);background:var(--glow);border:0;border-radius:4px;padding:9px 14px;cursor:pointer}
+button.ghost{background:transparent;color:var(--glow);border:1px solid var(--line)}
+button:focus-visible{outline:2px solid var(--text);outline-offset:2px}
+.hint{font-size:.76rem;color:var(--muted)}
+.links a{color:var(--glow)}
+@media (max-width:760px){.board{display:none}}
+@media (prefers-reduced-motion:reduce){.status.on::before{animation:none}}
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+
+<div class="clock"><div class="t" id="t">--:--</div><div class="d" id="d"></div></div>
+
+<div class="board">
+  <div class="panel"><h2>WEATHER</h2>
+    <div class="wx"><span class="temp" id="wxTemp">--°</span><span class="desc" id="wxDesc">Loading…</span></div>
+    <div class="small" id="wxRange"></div>
+  </div>
+  <div class="panel"><h2>TIMERS &amp; REMINDERS</h2><ul id="timerList"></ul></div>
+  <div class="panel"><h2>NOTES</h2><ul id="noteList"></ul></div>
+</div>
+
+<div class="console">
+  <div class="row">
+    <div class="status" id="status">Standby</div>
+    <button id="start">Start assistant</button>
+    <button class="ghost" id="bgBtn">Background</button>
+    <button class="ghost" id="bgReset" hidden>Default</button>
+    <button class="ghost" id="full">Full screen</button>
+    <input type="file" id="bgFile" accept="image/*" hidden>
+  </div>
+  <div class="log" id="log"></div>
+  <div class="links" id="links"></div>
+  <div class="hint">Say "Jarvis" first. Try: "what's the weather", "play a song", "set a timer for 5 minutes", "take a note…", "briefing", "what can you do".</div>
+</div>
+
+<script>
+/* ================= Storage helpers (this device only) ================= */
+function load(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d;}catch(e){return d;}}
+function save(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true;}catch(e){return false;}}
+
+/* ================= Scene: teal haze, bokeh, floating orb ================= */
+const cv=document.getElementById('bg'),cx=cv.getContext('2d');
+let W,H,bokeh=[],sprite,bgImg=null;
+let mode='idle';  // idle | listening | speaking | thinking
+const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+function makeSprite(){sprite=document.createElement('canvas');sprite.width=sprite.height=128;const s=sprite.getContext('2d');
+  const g=s.createRadialGradient(64,64,0,64,64,64);g.addColorStop(0,'rgba(255,255,255,1)');g.addColorStop(0.55,'rgba(255,255,255,.55)');g.addColorStop(0.8,'rgba(255,255,255,.18)');g.addColorStop(1,'rgba(255,255,255,0)');
+  s.fillStyle=g;s.fillRect(0,0,128,128);}
+const tints=[[79,227,255],[46,170,190],[150,240,255],[255,255,255],[30,120,150]];
+function buildScene(){W=cv.width=innerWidth;H=cv.height=innerHeight;
+  const n=Math.round(W*H/22000);bokeh=[];
+  for(let i=0;i<n;i++){const far=Math.random();bokeh.push({x:Math.random()*W,y:Math.random()*H,r:6+far*far*60,
+    a:0.04+Math.random()*0.16,c:tints[Math.floor(Math.random()*tints.length)],vx:(Math.random()-.5)*0.08,vy:-0.02-Math.random()*0.06,ph:Math.random()*6.28});}}
+makeSprite();addEventListener('resize',buildScene);buildScene();
+
+// user's own background image (stored on this Chromebook only)
+function setBg(url){if(!url){bgImg=null;document.getElementById('bgReset').hidden=true;return;}
+  const im=new Image();im.onload=()=>{bgImg=im;document.getElementById('bgReset').hidden=false;};im.src=url;}
+try{setBg(localStorage.getItem('deck.bg'));}catch(e){}
+
+let level=0,t0=performance.now();
+function frame(now){
+  const dt=Math.min(50,now-t0);t0=now;
+  // base: deep teal haze
+  if(bgImg){const s=Math.max(W/bgImg.width,H/bgImg.height),iw=bgImg.width*s,ih=bgImg.height*s;
+    cx.drawImage(bgImg,(W-iw)/2,(H-ih)/2,iw,ih);cx.fillStyle='rgba(3,22,26,.45)';cx.fillRect(0,0,W,H);}
+  else{const g=cx.createRadialGradient(W*0.55,H*0.45,0,W*0.55,H*0.45,Math.max(W,H)*0.8);
+    g.addColorStop(0,'#0b3a44');g.addColorStop(0.45,'#06232a');g.addColorStop(1,'#020b0e');cx.fillStyle=g;cx.fillRect(0,0,W,H);}
+  // bokeh lights
+  cx.globalCompositeOperation='lighter';
+  for(const b of bokeh){
+    if(!reduce){b.x+=b.vx*dt;b.y+=b.vy*dt;b.ph+=dt*0.0008;
+      if(b.y<-b.r)b.y=H+b.r;if(b.x<-b.r)b.x=W+b.r;if(b.x>W+b.r)b.x=-b.r;}
+    cx.globalAlpha=b.a*(0.75+0.25*Math.sin(b.ph))*(bgImg?0.6:1);
+    cx.filter='none';
+    const d=b.r*2;cx.drawImage(tint(b.c),b.x-b.r,b.y-b.r,d,d);
+  }
+  cx.globalAlpha=1;cx.globalCompositeOperation='source-over';
+  drawOrb(now);
+  requestAnimationFrame(frame);
+}
+const tintCache={};
+function tint(c){const k=c.join();if(tintCache[k])return tintCache[k];const t=document.createElement('canvas');t.width=t.height=128;const s=t.getContext('2d');
+  s.drawImage(sprite,0,0);s.globalCompositeOperation='source-in';s.fillStyle=`rgb(${c})`;s.fillRect(0,0,128,128);return tintCache[k]=t;}
+
+function drawOrb(now){
+  const R=Math.min(W,H)*0.085;
+  const bob=reduce?0:Math.sin(now/1400)*R*0.18;
+  const ox=W/2,oy=H*0.42+bob;
+  const target={idle:0.2,listening:0.5,thinking:0.7,speaking:0.6+0.4*Math.abs(Math.sin(now/95))}[mode];
+  level+=(target-level)*0.12;
+  // halo
+  let g=cx.createRadialGradient(ox,oy,R*0.5,ox,oy,R*4);
+  g.addColorStop(0,`rgba(79,227,255,${0.22+0.25*level})`);g.addColorStop(1,'rgba(79,227,255,0)');
+  cx.fillStyle=g;cx.beginPath();cx.arc(ox,oy,R*4,0,7);cx.fill();
+  // glass sphere body
+  g=cx.createRadialGradient(ox-R*0.35,oy-R*0.4,R*0.1,ox,oy,R);
+  g.addColorStop(0,'rgba(220,250,255,.55)');g.addColorStop(0.35,'rgba(60,150,175,.35)');g.addColorStop(1,'rgba(4,30,38,.85)');
+  cx.fillStyle=g;cx.beginPath();cx.arc(ox,oy,R,0,7);cx.fill();
+  // rim light
+  cx.lineWidth=2;cx.strokeStyle=`rgba(79,227,255,${0.5+0.4*level})`;cx.shadowColor='#4fe3ff';cx.shadowBlur=18*level+6;
+  cx.beginPath();cx.arc(ox,oy,R,0,7);cx.stroke();cx.shadowBlur=0;
+  // inner core
+  const core=R*(0.22+0.16*level);
+  g=cx.createRadialGradient(ox,oy,0,ox,oy,core*2.2);
+  g.addColorStop(0,'rgba(255,255,255,.95)');g.addColorStop(0.35,`rgba(79,227,255,${0.6+0.3*level})`);g.addColorStop(1,'rgba(79,227,255,0)');
+  cx.fillStyle=g;cx.beginPath();cx.arc(ox,oy,core*2.2,0,7);cx.fill();
+  // specular highlight
+  cx.fillStyle='rgba(255,255,255,.35)';cx.beginPath();cx.ellipse(ox-R*0.38,oy-R*0.45,R*0.28,R*0.14,-0.6,0,7);cx.fill();
+  // orbit rings (tilted)
+  const rot=reduce?0:now/1800;
+  cx.lineWidth=1.5;
+  for(let i=0;i<2;i++){
+    cx.save();cx.translate(ox,oy);cx.rotate(i?0.5:-0.35);cx.scale(1,0.32);
+    cx.strokeStyle=`rgba(79,227,255,${0.25+0.45*level})`;
+    const r=R*(1.6+i*0.45),a=rot*(i?-1:1);
+    cx.beginPath();cx.arc(0,0,r,a,a+2.4);cx.stroke();cx.beginPath();cx.arc(0,0,r,a+3.2,a+4.6);cx.stroke();
+    // satellite dot
+    cx.fillStyle='#d9f7ff';cx.beginPath();cx.arc(Math.cos(a+2.4)*r,Math.sin(a+2.4)*r,3/0.32*0.5,0,7);cx.fill();
+    cx.restore();
+  }
+}
+requestAnimationFrame(frame);
+
+// background picker
+document.getElementById('bgBtn').onclick=()=>document.getElementById('bgFile').click();
+document.getElementById('bgFile').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();
+  r.onload=()=>{const im=new Image();im.onload=()=>{const s=Math.min(1,1920/im.width),c=document.createElement('canvas');
+    c.width=Math.round(im.width*s);c.height=Math.round(im.height*s);c.getContext('2d').drawImage(im,0,0,c.width,c.height);
+    const url=c.toDataURL('image/jpeg',0.85);setBg(url);try{localStorage.setItem('deck.bg',url);}catch(err){log('That image is too large to remember after restart, but it will show for now.','ai');}};im.src=r.result;};
+  r.readAsDataURL(f);e.target.value='';};
+function resetBg(){setBg(null);try{localStorage.removeItem('deck.bg');}catch(e){}}
+document.getElementById('bgReset').onclick=resetBg;
+
+/* ================= Clock ================= */
+const fmtTime=d=>d.toLocaleTimeString([], {hour:'numeric',minute:'2-digit'});
+function tick(){const n=new Date();document.getElementById('t').textContent=fmtTime(n);
+  document.getElementById('d').textContent=n.toLocaleDateString([], {weekday:'long',month:'long',day:'numeric'});renderTimers();}
+
+/* ================= Console + voice output ================= */
+const logEl=document.getElementById('log'),statusEl=document.getElementById('status'),linksEl=document.getElementById('links');
+function log(text,who){const p=document.createElement('div');p.className=who;p.textContent=text;logEl.appendChild(p);logEl.scrollTop=logEl.scrollHeight;}
+function setStatus(s){statusEl.textContent=s;}
+let voice=null;
+function pickVoice(){const v=speechSynthesis.getVoices();
+  voice=v.find(x=>/en-GB/i.test(x.lang)&&/male|daniel|george|arthur|ryan/i.test(x.name))||v.find(x=>/en-GB/i.test(x.lang))||v.find(x=>/^en/i.test(x.lang))||null;}
+speechSynthesis.onvoiceschanged=pickVoice;pickVoice();
+let rec=null,listening=false,speaking=false,pending='',silenceTimer=null;
+function say(text){
+  log(text,'ai');pending='';clearTimeout(silenceTimer);silenceTimer=null;
+  const u=new SpeechSynthesisUtterance(text);if(voice)u.voice=voice;u.rate=1;u.pitch=0.9;
+  if(listening&&rec)rec.abort();speaking=true;mode='speaking';
+  u.onend=u.onerror=()=>{speaking=false;mode=listening?'listening':'idle';if(listening)startRec();};
+  speechSynthesis.speak(u);
+}
+function beep(){try{const a=new AudioContext(),o=a.createOscillator(),g=a.createGain();o.connect(g);g.connect(a.destination);
+  o.frequency.value=880;g.gain.value=0;o.start();[0,0.25,0.5].forEach(t=>{g.gain.setValueAtTime(0.25,a.currentTime+t);g.gain.setValueAtTime(0,a.currentTime+t+0.15);});o.stop(a.currentTime+0.8);}catch(e){}}
+function openSite(url,label){const w=window.open(url,'_blank');
+  if(!w){linksEl.innerHTML='';const a=document.createElement('a');a.href=url;a.target='_blank';a.rel='noopener';a.textContent='Click to open '+label;linksEl.appendChild(a);}}
+
+/* ================= Weather (Open-Meteo, no key needed) ================= */
+const WX={0:'clear',1:'mostly clear',2:'partly cloudy',3:'overcast',45:'foggy',48:'foggy',51:'light drizzle',53:'drizzle',55:'heavy drizzle',61:'light rain',63:'rain',65:'heavy rain',71:'light snow',73:'snow',75:'heavy snow',80:'rain showers',81:'rain showers',82:'heavy showers',95:'thunderstorms',96:'thunderstorms',99:'thunderstorms'};
+let wx=null;
+function getCoords(){return new Promise(res=>{
+  const fallback=load('deck.coords',null)||{lat:32.7157,lon:-117.1611}; // San Diego
+  if(!navigator.geolocation)return res(fallback);
+  navigator.geolocation.getCurrentPosition(p=>{const c={lat:p.coords.latitude,lon:p.coords.longitude};save('deck.coords',c);res(c);},()=>res(fallback),{timeout:8000,maximumAge:3600000});});}
+async function loadWeather(){
+  try{const c=await getCoords();
+    const r=await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${c.lat}&longitude=${c.lon}&current=temperature_2m,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto&forecast_days=1`).then(r=>r.json());
+    wx={temp:Math.round(r.current.temperature_2m),desc:WX[r.current.weather_code]||'mixed conditions',wind:Math.round(r.current.wind_speed_10m),
+        hi:Math.round(r.daily.temperature_2m_max[0]),lo:Math.round(r.daily.temperature_2m_min[0]),rain:r.daily.precipitation_probability_max[0]};
+    document.getElementById('wxTemp').textContent=wx.temp+'°';document.getElementById('wxDesc').textContent=wx.desc;
+    document.getElementById('wxRange').textContent=`High ${wx.hi}° · Low ${wx.lo}° · Rain ${wx.rain}% · Wind ${wx.wind} mph`;
+  }catch(e){document.getElementById('wxDesc').textContent='Unavailable';}
+  return wx;}
+function weatherSentence(){if(!wx)return 'I could not get the weather right now.';
+  return `It is ${wx.temp} degrees and ${wx.desc}, with a high of ${wx.hi} and a low of ${wx.lo}. Chance of rain is ${wx.rain} percent.`;}
+loadWeather();setInterval(loadWeather,30*60*1000);
+
+/* ================= Timers + reminders ================= */
+let timers=load('deck.timers',[]); // {id, at, text, kind}
+const NUM={a:1,an:1,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,fifteen:15,twenty:20,thirty:30,forty:40,'forty-five':45,fifty:50,sixty:60,half:0.5};
+const NUMRE='(\\d+(?:\\.\\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|forty-five|forty|fifty|sixty|half)';
+function parseDuration(q){let ms=0,found=false,m;const re=new RegExp(NUMRE+'\\s*(?:an?\\s*)?(second|sec|minute|min|hour|hr)s?','g');
+  while((m=re.exec(q))){const n=isNaN(m[1])?NUM[m[1]]:parseFloat(m[1]);const u=m[2][0];ms+=n*(u==='s'?1e3:u==='m'?6e4:36e5);found=true;}
+  return found?ms:null;}
+function humanDur(ms){const s=Math.round(ms/1000),h=Math.floor(s/3600),m=Math.floor(s%3600/60),r=s%60;
+  return [h&&h+' hour'+(h>1?'s':''),m&&m+' minute'+(m>1?'s':''),(!h&&r)&&r+' second'+(r>1?'s':'')].filter(Boolean).join(' and ')||'a moment';}
+function addTimer(ms,text,kind){timers.push({id:Date.now()+Math.random(),at:Date.now()+ms,text,kind});save('deck.timers',timers);renderTimers();}
+function renderTimers(){
+  const now=Date.now(),due=timers.filter(t=>t.at<=now);
+  if(due.length){timers=timers.filter(t=>t.at>now);save('deck.timers',timers);
+    due.forEach(t=>{beep();const late=now-t.at>120000;
+      say(t.kind==='timer'?`Your ${t.text} is done.`:(late?'While you were away, you asked me to remind you to ':'Reminder: ')+t.text+'.');});}
+  const ul=document.getElementById('timerList');ul.innerHTML='';
+  if(!timers.length){const li=document.createElement('li');li.className='small';li.textContent='None set. Say "Jarvis, set a timer for 10 minutes."';ul.appendChild(li);return;}
+  timers.slice().sort((a,b)=>a.at-b.at).forEach(t=>{const li=document.createElement('li');li.className='timer';
+    const s=document.createElement('span');s.textContent=t.kind==='timer'?t.text:'Remind: '+t.text;
+    const b=document.createElement('b'),left=Math.max(0,t.at-now),h=Math.floor(left/36e5),m=Math.floor(left%36e5/6e4),sec=Math.floor(left%6e4/1e3);
+    b.textContent=(h?h+':':'')+String(m).padStart(h?2:1,'0')+':'+String(sec).padStart(2,'0');li.append(s,b);ul.appendChild(li);});
+}
+
+/* ================= Notes ================= */
+let notes=load('deck.notes',[]); // {text, at}
+function renderNotes(){const ul=document.getElementById('noteList');ul.innerHTML='';
+  if(!notes.length){const li=document.createElement('li');li.className='small';li.textContent='No notes yet. Say "Jarvis, take a note…"';ul.appendChild(li);return;}
+  notes.slice(-5).reverse().forEach(n=>{const li=document.createElement('li');li.textContent='• '+n.text;ul.appendChild(li);});
+  if(notes.length>5){const li=document.createElement('li');li.className='small';li.textContent=`+ ${notes.length-5} more`;ul.appendChild(li);}}
+renderNotes();tick();setInterval(tick,1000);
+
+/* ================= Briefing ================= */
+async function briefing(){
+  mode='thinking';if(!wx)await loadWeather();
+  const h=new Date().getHours();
+  let s=(h<12?'Good morning':h<18?'Good afternoon':'Good evening')+`, Maciah. It is ${fmtTime(new Date())}. `;
+  if(wx)s+=`Outside it is ${wx.temp} degrees and ${wx.desc}. `;
+  const r=timers.filter(t=>t.kind==='reminder').length,tm=timers.filter(t=>t.kind==='timer').length;
+  if(r)s+=`You have ${r} reminder${r>1?'s':''} pending. `;if(tm)s+=`${tm} timer${tm>1?'s are':' is'} running. `;
+  if(notes.length)s+=`You have ${notes.length} note${notes.length>1?'s':''} saved. `;
+  say(s+'All systems online.');}
+
+/* ================= Commands ================= */
+const sites={youtube:'https://www.youtube.com',gmail:'https://mail.google.com',google:'https://www.google.com',
+  netlify:'https://app.netlify.com',github:'https://github.com/maciahtohmas',adsense:'https://adsense.google.com',
+  claude:'https://claude.ai',spotify:'https://open.spotify.com','my game':'https://samuraivengeance.com',
+  'samurai vengeance':'https://samuraivengeance.com',calendar:'https://calendar.google.com',drive:'https://drive.google.com'};
+const jokes=["I would tell you a UDP joke, but you might not get it.","There are 10 kinds of people. Those who read binary and those who don't.","My code never has bugs. It just develops random features.","I tried to catch some fog. I mist."];
+let confirmClear=0,awakeUntil=0;
+
+function handle(raw){
+  const q=raw.toLowerCase().replace(/[.!?]+$/,'').trim();log(raw,'you');linksEl.innerHTML='';
+  if(confirmClear>Date.now()){confirmClear=0;
+    if(/^(yes|yeah|yep|confirm|do it|sure)/.test(q)){notes=[];save('deck.notes',notes);renderNotes();say('All notes erased.');}else say('Okay, keeping your notes.');return;}
+  if(/stop listening|go to sleep|goodbye/.test(q)){say('Going quiet. Press start when you need me.');setTimeout(stopAll,50);return;}
+  if(/what can you do|\bhelp\b|commands/.test(q)){say('I can tell the time and weather, play music, search the web, open your sites, set timers and reminders, take notes, and give you a briefing.');return;}
+  if(/briefing|status report|catch me up/.test(q)){briefing();return;}
+  if(/reset (the )?background|default background/.test(q)){resetBg();say('Background reset.');return;}
+  if(/weather|temperature|outside|\brain\b/.test(q)){mode='thinking';loadWeather().then(()=>say(weatherSentence()));return;}
+
+  // Notes
+  if(/^(take a note|make a note|add a note|note)\b/.test(q)){
+    const text=raw.replace(/^\s*(take a note|make a note|add a note|note)(\s+that)?[:,]?\s*/i,'').trim();
+    if(!text){awakeUntil=Date.now()+10000;noteNext=true;say('What should the note say?');return;}
+    notes.push({text,at:Date.now()});save('deck.notes',notes);renderNotes();say('Noted.');return;}
+  if(/(read|what are) (me )?my notes|read notes/.test(q)){
+    if(!notes.length){say('You have no notes.');return;}
+    say(`You have ${notes.length} note${notes.length>1?'s':''}. `+notes.map((n,i)=>`${i+1}: ${n.text}.`).join(' '));return;}
+  if(/(clear|delete|erase) (all )?(my )?notes/.test(q)){if(!notes.length){say('There are no notes to clear.');return;}
+    confirmClear=awakeUntil=Date.now()+10000;say(`Erase all ${notes.length} notes? Say yes to confirm.`);return;}
+
+  // Timers and reminders
+  if(/(cancel|stop|clear) (all )?(the |my )?(timers?|reminders?)/.test(q)){const n=timers.length;timers=[];save('deck.timers',timers);renderTimers();say(n?'All timers and reminders cancelled.':'Nothing to cancel.');return;}
+  if(/remind me/.test(q)){
+    const ms=parseDuration(q);
+    let text=q.replace(/.*remind me\s*/,'').replace(new RegExp('\\bin\\s+'+NUMRE+'\\s*(?:an?\\s*)?(seconds?|secs?|minutes?|mins?|hours?|hrs?)(\\s+and\\s+'+NUMRE+'\\s*(seconds?|minutes?|hours?))?'),'').replace(/^(to|that)\s+/,'').replace(/\s+/g,' ').trim();
+    if(!ms){say('When should I remind you? Try: remind me in 20 minutes to stretch.');return;}
+    if(!text)text='check in';addTimer(ms,text,'reminder');say(`Okay. I will remind you to ${text} in ${humanDur(ms)}.`);return;}
+  if(/how (much time|long) (is )?left|time left/.test(q)){
+    if(!timers.length){say('No timers running.');return;}
+    const t=timers.slice().sort((a,b)=>a.at-b.at)[0];say(`${humanDur(t.at-Date.now())} left on ${t.kind==='timer'?'your '+t.text:'your reminder to '+t.text}.`);return;}
+  if(/timer|countdown/.test(q)){const ms=parseDuration(q);
+    if(!ms){say('How long? Try: set a timer for 5 minutes.');return;}
+    addTimer(ms,humanDur(ms)+' timer','timer');say(`Timer set for ${humanDur(ms)}.`);return;}
+
+  // Time and date
+  if(/what time|the time/.test(q)){say('It is '+fmtTime(new Date())+'.');return;}
+  if(/\bdate\b|what day/.test(q)){say('Today is '+new Date().toLocaleDateString([], {weekday:'long',month:'long',day:'numeric'})+'.');return;}
+
+  // Music: open the top YouTube result
+  let m=q.match(/\bplay\s+(.+)/)||q.match(/(?:put on|listen to)\s+(.+)/);
+  if(m){const what=m[1].replace(/\s*(on|from)\s+youtube\s*$/,'').replace(/^(the song|song|some)\s+/,'');
+    say('Playing '+what+'.');
+    openSite('https://www.google.com/search?btnI=1&q='+encodeURIComponent('site:youtube.com/watch '+what),'YouTube');return;}
+
+  m=q.match(/(?:search for|search|google|look up)\s+(.+)/);
+  if(m){say('Searching for '+m[1]+'.');openSite('https://www.google.com/search?q='+encodeURIComponent(m[1]),'search');return;}
+  if(/\b(open|launch|go to)\b/.test(q)){for(const k in sites){if(q.includes(k)){say('Opening '+k+'.');openSite(sites[k],k);return;}}
+    say('I do not have that one yet.');return;}
+  if(/joke/.test(q)){say(jokes[Math.floor(Math.random()*jokes.length)]);return;}
+  if(/^(hello|hi|hey|are you there)\b/.test(q)){say('Online and listening, Maciah.');return;}
+  if(/who are you|your name/.test(q)){say('I am your command deck assistant.');return;}
+  if(/full ?screen/.test(q)){goFull();say('Full screen.');return;}
+  lookup(raw);
+}
+let noteNext=false;
+
+/* General questions: Wikipedia summary, with a Google link as backup */
+async function lookup(raw){
+  const topic=raw.replace(/^(what|who|where|when|why|how)( is| are| was| were| did| does| do)?( a| an| the)?\s+/i,'').replace(/\?$/,'');
+  mode='thinking';setStatus('Searching');
+  try{
+    const s=await fetch('https://en.wikipedia.org/w/api.php?action=query&list=search&srlimit=1&format=json&origin=*&srsearch='+encodeURIComponent(topic)).then(r=>r.json());
+    const hit=s.query&&s.query.search&&s.query.search[0];if(!hit)throw 0;
+    const sum=await fetch('https://en.wikipedia.org/api/rest_v1/page/summary/'+encodeURIComponent(hit.title)).then(r=>r.json());
+    const text=(sum.extract||'').split(/(?<=\.)\s+/).slice(0,2).join(' ');if(!text)throw 0;
+    say(text);
+  }catch(e){say('I could not find a quick answer. Here is a web search.');}
+  linksEl.innerHTML='';const a=document.createElement('a');a.href='https://www.google.com/search?q='+encodeURIComponent(raw);
+  a.target='_blank';a.rel='noopener';a.textContent='More results for "'+raw+'"';linksEl.appendChild(a);
+  if(listening)setStatus('Listening for "Jarvis"');
+}
+
+/* ================= Voice input with wake word ================= */
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+function startRec(){if(!rec||speaking)return;try{rec.start();}catch(e){}}
+function stopAll(){listening=false;mode='idle';rec&&rec.abort();statusEl.classList.remove('on');setStatus('Standby');document.getElementById('start').textContent='Start assistant';}
+// keep listening through short pauses: act after about 2 seconds of silence
+function flush(){silenceTimer=null;const t=pending.trim();pending='';if(t)heard(t);}
+if(SR){rec=new SR();rec.lang='en-US';rec.continuous=true;rec.interimResults=true;
+  rec.onresult=e=>{let finals='',interim='';
+    for(let i=e.resultIndex;i<e.results.length;i++){const r=e.results[i];if(r.isFinal)finals+=r[0].transcript+' ';else interim+=r[0].transcript;}
+    if(finals)pending+=finals;clearTimeout(silenceTimer);silenceTimer=setTimeout(flush,interim?2500:1800);};
+  rec.onend=()=>{if(pending&&!silenceTimer)flush();if(listening&&!speaking)setTimeout(startRec,250);};
+  rec.onerror=e=>{if(e.error==='not-allowed'||e.error==='service-not-allowed'){stopAll();log('Microphone blocked. Click the mic icon in the address bar and allow it.','ai');}};
+}
+const WAKE=/\b(jarvis|jervis|travis|jarvis's)\b[,.!]?\s*/i;
+function heard(text){
+  const m=text.match(WAKE);
+  if(m){const rest=text.slice(m.index+m[0].length).trim();
+    if(rest){awakeUntil=0;noteNext=false;handle(rest);}else{awakeUntil=Date.now()+8000;say('Yes?');}return;}
+  if(Date.now()<awakeUntil){awakeUntil=0;
+    if(noteNext){noteNext=false;notes.push({text:text.trim(),at:Date.now()});save('deck.notes',notes);renderNotes();log(text,'you');say('Noted.');return;}
+    handle(text);}
+}
+function goOnline(){listening=true;mode='listening';statusEl.classList.add('on');setStatus('Listening for "Jarvis"');
+  document.getElementById('start').textContent='Stop';startRec();briefing();}
+document.getElementById('start').onclick=()=>{
+  if(listening){stopAll();return;}
+  if(!rec){say('Voice input is not available in this browser. Please use Chrome.');return;}
+  goOnline();};
+// start by itself if the microphone was already allowed
+(async()=>{if(!rec)return;try{const p=await navigator.permissions.query({name:'microphone'});if(p.state==='granted')goOnline();}catch(e){}})();
+function goFull(){document.documentElement.requestFullscreen?.().catch(()=>{});}
+document.getElementById('full').onclick=goFull;
+</script>
+</body>
+</html>
