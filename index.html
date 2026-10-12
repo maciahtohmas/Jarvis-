@@ -42,7 +42,7 @@ ul{list-style:none;margin:0;padding:0;display:grid;gap:4px;font-size:.88rem}
 .console{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);width:min(680px,calc(100% - 32px));
   background:var(--glass);border:1px solid var(--line);border-radius:8px;padding:14px 16px;backdrop-filter:blur(6px);display:grid;gap:10px}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.status{font-size:.8rem;letter-spacing:.2em;text-transform:uppercase;color:var(--glow);flex:1;min-width:0}
+.status{font-size:.8rem;letter-spacing:.2em;text-transform:uppercase;color:var(--glow);flex:1 1 100%;min-width:0}
 .status::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:#1d4550;margin-right:8px;vertical-align:middle}
 .status.on::before{background:var(--glow);box-shadow:0 0 10px var(--glow);animation:blink 1.2s infinite}
 @keyframes blink{50%{opacity:.3}}
@@ -53,6 +53,11 @@ button{font:inherit;font-size:.8rem;letter-spacing:.12em;text-transform:uppercas
 select.ghost{font:inherit;font-size:.78rem;color:var(--glow);background:var(--glass);border:1px solid var(--line);border-radius:4px;padding:8px 10px;max-width:220px}
 button.ghost{background:transparent;color:var(--glow);border:1px solid var(--line)}
 button:focus-visible{outline:2px solid var(--text);outline-offset:2px}
+.brain{font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:4px 10px}
+.brain.on{color:var(--glow);border-color:var(--glow)}
+.pair{display:grid;gap:8px;border-top:1px solid var(--line);padding-top:10px}
+.pair .code{font-family:var(--display);font-size:1.6rem;letter-spacing:.18em;color:var(--glow)}
+.pair input{font:inherit;font-size:.9rem;letter-spacing:.12em;text-transform:uppercase;color:var(--text);background:transparent;border:1px solid var(--line);border-radius:4px;padding:8px 10px;width:11em;min-width:0}
 .hint{font-size:.76rem;color:var(--muted)}
 .links a{color:var(--glow)}
 @media (max-width:760px){.board{display:none}}
@@ -81,11 +86,23 @@ button:focus-visible{outline:2px solid var(--text);outline-offset:2px}
     <button class="ghost" id="bgReset" hidden>Default</button>
     <button class="ghost" id="full">Full screen</button>
     <select id="voiceSel" class="ghost" aria-label="Jarvis voice"></select>
+    <button class="ghost" id="pairBtn">Link devices</button>
+    <span class="brain" id="linkState">Not linked</span>
     <input type="file" id="bgFile" accept="image/*" hidden>
+  </div>
+  <div class="pair" id="pairBox" hidden>
+    <div class="small" id="pairInfo">Link this device with your other one. On the first device, create a code. On the second, type that code.</div>
+    <div class="code" id="pairCode" hidden></div>
+    <div class="row">
+      <button class="ghost" id="pairNew">Create a code</button>
+      <input id="pairInput" placeholder="Type a code" autocomplete="off" autocapitalize="characters" spellcheck="false">
+      <button class="ghost" id="pairJoin">Link</button>
+      <button class="ghost" id="pairOff" hidden>Unlink</button>
+    </div>
   </div>
   <div class="log" id="log"></div>
   <div class="links" id="links"></div>
-  <div class="hint">Say "Jarvis" first. Try: "what's the weather", "play a song", "set a timer for 5 minutes", "take a note…", "briefing", "what can you do".</div>
+  <div class="hint">Say "Jarvis" first. Try: "what's the weather", "play a song", "set a timer for 5 minutes", "take a note…", "briefing", "play a song on my phone".</div>
 </div>
 
 <script>
@@ -220,7 +237,10 @@ function say(text){
 }
 function beep(){try{const a=new AudioContext(),o=a.createOscillator(),g=a.createGain();o.connect(g);g.connect(a.destination);
   o.frequency.value=880;g.gain.value=0;o.start();[0,0.25,0.5].forEach(t=>{g.gain.setValueAtTime(0.25,a.currentTime+t);g.gain.setValueAtTime(0,a.currentTime+t+0.15);});o.stop(a.currentTime+0.8);}catch(e){}}
-function openSite(url,label){const w=window.open(url,'_blank');
+function persistNotes(){save('deck.notes',notes);if(window.syncPush)window.syncPush('notes',notes);}
+function persistTimers(){save('deck.timers',timers);if(window.syncPush)window.syncPush('timers',timers);}
+let lastLink=null;
+function openSite(url,label){lastLink={url,label};const w=window.open(url,'_blank');
   if(!w){linksEl.innerHTML='';const a=document.createElement('a');a.href=url;a.target='_blank';a.rel='noopener';a.textContent='Click to open '+label;linksEl.appendChild(a);}}
 
 /* ================= Weather (Open-Meteo, no key needed) ================= */
@@ -252,10 +272,10 @@ function parseDuration(q){let ms=0,found=false,m;const re=new RegExp(NUMRE+'\\s*
   return found?ms:null;}
 function humanDur(ms){const s=Math.round(ms/1000),h=Math.floor(s/3600),m=Math.floor(s%3600/60),r=s%60;
   return [h&&h+' hour'+(h>1?'s':''),m&&m+' minute'+(m>1?'s':''),(!h&&r)&&r+' second'+(r>1?'s':'')].filter(Boolean).join(' and ')||'a moment';}
-function addTimer(ms,text,kind){timers.push({id:Date.now()+Math.random(),at:Date.now()+ms,text,kind});save('deck.timers',timers);renderTimers();}
+function addTimer(ms,text,kind){timers.push({id:Date.now()+Math.random(),at:Date.now()+ms,text,kind});persistTimers();renderTimers();}
 function renderTimers(){
   const now=Date.now(),due=timers.filter(t=>t.at<=now);
-  if(due.length){timers=timers.filter(t=>t.at>now);save('deck.timers',timers);
+  if(due.length){timers=timers.filter(t=>t.at>now);persistTimers();
     due.forEach(t=>{beep();const late=now-t.at>120000;
       say(t.kind==='timer'?`Your ${t.text} is done.`:(late?'While you were away, you asked me to remind you to ':'Reminder: ')+t.text+'.');});}
   const ul=document.getElementById('timerList');ul.innerHTML='';
@@ -293,12 +313,26 @@ const sites={youtube:'https://www.youtube.com',gmail:'https://mail.google.com',g
 const jokes=["I would tell you a UDP joke, but you might not get it.","There are 10 kinds of people. Those who read binary and those who don't.","My code never has bugs. It just develops random features.","I tried to catch some fog. I mist."];
 let confirmClear=0,awakeUntil=0;
 
-function handle(raw){
-  const q=raw.toLowerCase().replace(/[.!?]+$/,'').trim();log(raw,'you');linksEl.innerHTML='';
+const ME=/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)?'phone':'chromebook';
+const DEV='(chromebook|computer|laptop|phone|iphone)';
+function devName(w){return /phone/.test(w)?'phone':'chromebook';}
+function handle(raw,fromRemote){
+  const q=raw.toLowerCase().replace(/[.!?]+$/,'').trim();log(fromRemote?raw+'  (from your '+fromRemote+')':raw,'you');linksEl.innerHTML='';
+  if(!fromRemote){
+    if(/^(pair|link)( my)? (phone|chromebook|devices?)|pairing code|link code/.test(q)){openPair();say(room?'Your devices are linked. The code is on screen.':'The pairing panel is open on screen.');return;}
+    let r=q.match(new RegExp('^send (?:that|this|it) to (?:my|the) '+DEV+'$'));
+    if(r){const to=devName(r[1]);if(to===ME){say('That is this device.');return;}
+      if(!lastLink){say('I have nothing to send yet.');return;}
+      sendTo(to,{type:'open',url:lastLink.url,label:lastLink.label},'Sent '+lastLink.label+' to your '+to+'.');return;}
+    r=q.match(new RegExp('^(?:on|to) (?:my|the) '+DEV+'[, ]+(.+)$'));let cmd,to;
+    if(r){to=devName(r[1]);cmd=r[2];}
+    else{r=q.match(new RegExp('^(.+?) (?:on|to) (?:my|the) '+DEV+'$'));if(r){to=devName(r[2]);cmd=r[1];}}
+    if(cmd){if(to===ME){return handle(cmd,null);}sendTo(to,{type:'cmd',text:cmd},'Done. Sent to your '+to+'.');return;}
+  }
   if(confirmClear>Date.now()){confirmClear=0;
-    if(/^(yes|yeah|yep|confirm|do it|sure)/.test(q)){notes=[];save('deck.notes',notes);renderNotes();say('All notes erased.');}else say('Okay, keeping your notes.');return;}
+    if(/^(yes|yeah|yep|confirm|do it|sure)/.test(q)){notes=[];persistNotes();renderNotes();say('All notes erased.');}else say('Okay, keeping your notes.');return;}
   if(/stop listening|go to sleep|goodbye/.test(q)){say('Going quiet. Press start when you need me.');setTimeout(stopAll,50);return;}
-  if(/what can you do|\bhelp\b|commands/.test(q)){say('I can tell the time and weather, play music, search the web, open your sites, set timers and reminders, take notes, and give you a briefing.');return;}
+  if(/what can you do|\bhelp\b|commands/.test(q)){say('I can tell the time and weather, play music, send things between your phone and Chromebook, search the web, open your sites, set timers and reminders, take notes, and give you a briefing.');return;}
   if(/briefing|status report|catch me up/.test(q)){briefing();return;}
   if(/reset (the )?background|default background/.test(q)){resetBg();say('Background reset.');return;}
   if(/weather|temperature|outside|\brain\b/.test(q)){mode='thinking';loadWeather().then(()=>say(weatherSentence()));return;}
@@ -307,7 +341,7 @@ function handle(raw){
   if(/^(take a note|make a note|add a note|note)\b/.test(q)){
     const text=raw.replace(/^\s*(take a note|make a note|add a note|note)(\s+that)?[:,]?\s*/i,'').trim();
     if(!text){awakeUntil=Date.now()+10000;noteNext=true;say('What should the note say?');return;}
-    notes.push({text,at:Date.now()});save('deck.notes',notes);renderNotes();say('Noted.');return;}
+    notes.push({text,at:Date.now()});persistNotes();renderNotes();say('Noted.');return;}
   if(/(read|what are) (me )?my notes|read notes/.test(q)){
     if(!notes.length){say('You have no notes.');return;}
     say(`You have ${notes.length} note${notes.length>1?'s':''}. `+notes.map((n,i)=>`${i+1}: ${n.text}.`).join(' '));return;}
@@ -315,7 +349,7 @@ function handle(raw){
     confirmClear=awakeUntil=Date.now()+10000;say(`Erase all ${notes.length} notes? Say yes to confirm.`);return;}
 
   // Timers and reminders
-  if(/(cancel|stop|clear) (all )?(the |my )?(timers?|reminders?)/.test(q)){const n=timers.length;timers=[];save('deck.timers',timers);renderTimers();say(n?'All timers and reminders cancelled.':'Nothing to cancel.');return;}
+  if(/(cancel|stop|clear) (all )?(the |my )?(timers?|reminders?)/.test(q)){const n=timers.length;timers=[];persistTimers();renderTimers();say(n?'All timers and reminders cancelled.':'Nothing to cancel.');return;}
   if(/remind me/.test(q)){
     const ms=parseDuration(q);
     let text=q.replace(/.*remind me\s*/,'').replace(new RegExp('\\bin\\s+'+NUMRE+'\\s*(?:an?\\s*)?(seconds?|secs?|minutes?|mins?|hours?|hrs?)(\\s+and\\s+'+NUMRE+'\\s*(seconds?|minutes?|hours?))?'),'').replace(/^(to|that)\s+/,'').replace(/\s+/g,' ').trim();
@@ -366,6 +400,28 @@ async function lookup(raw){
   if(listening)setStatus('Listening for "Jarvis"');
 }
 
+/* ================= Device link (Firebase, see module script below) ================= */
+let room=load('deck.room',null);
+function openPair(){document.getElementById('pairBox').hidden=false;renderPair();}
+function renderPair(){const c=document.getElementById('pairCode');
+  c.hidden=!room;c.textContent=room?room.slice(0,5)+'-'+room.slice(5):'';
+  document.getElementById('pairOff').hidden=!room;
+  document.getElementById('pairInfo').textContent=room?'Linked. Use this same code on your other device.':'Link this device with your other one. On the first device, create a code. On the second, type that code.';}
+function setLink(state){const el=document.getElementById('linkState');el.textContent=state;el.classList.toggle('on',state==='Linked');}
+function sendTo(to,payload,ok){
+  if(!room||!window.syncSend){say('Your devices are not linked yet. Say: Jarvis, pair my phone.');return;}
+  window.syncSend(to,payload).then(()=>say(ok)).catch(()=>say('I could not reach your '+to+'.'));}
+function runRemote(ev){
+  if(ev.type==='open'){say('Opening '+(ev.label||'link')+' from your '+ev.from+'.');openSite(ev.url,ev.label||'link');}
+  else if(ev.type==='cmd'){handle(ev.text,ev.from);}
+}
+document.getElementById('pairBtn').onclick=()=>{const b=document.getElementById('pairBox');b.hidden=!b.hidden;renderPair();};
+document.getElementById('pairNew').onclick=()=>{const A='ABCDEFGHJKMNPQRSTUVWXYZ23456789';let c='';const r=crypto.getRandomValues(new Uint32Array(10));
+  for(const n of r)c+=A[n%A.length];window.syncConnect&&window.syncConnect(c,true);};
+document.getElementById('pairJoin').onclick=()=>{const c=document.getElementById('pairInput').value.toUpperCase().replace(/[^A-Z0-9]/g,'');
+  if(c.length!==10){log('Codes are 10 letters and numbers, like ABCDE-23456.','ai');return;}window.syncConnect&&window.syncConnect(c,false);};
+document.getElementById('pairOff').onclick=()=>{window.syncDisconnect&&window.syncDisconnect();};
+
 /* ================= Voice input with wake word ================= */
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 function startRec(){if(!rec||speaking)return;try{rec.start();}catch(e){}}
@@ -385,7 +441,7 @@ function heard(text){
   if(m){const rest=text.slice(m.index+m[0].length).trim();
     if(rest){awakeUntil=0;noteNext=false;handle(rest);}else{awakeUntil=Date.now()+8000;say('Yes?');}return;}
   if(Date.now()<awakeUntil){awakeUntil=0;
-    if(noteNext){noteNext=false;notes.push({text:text.trim(),at:Date.now()});save('deck.notes',notes);renderNotes();log(text,'you');say('Noted.');return;}
+    if(noteNext){noteNext=false;notes.push({text:text.trim(),at:Date.now()});persistNotes();renderNotes();log(text,'you');say('Noted.');return;}
     handle(text);}
 }
 function goOnline(){listening=true;mode='listening';statusEl.classList.add('on');setStatus('Listening for "Jarvis"');
@@ -398,6 +454,48 @@ document.getElementById('start').onclick=()=>{
 (async()=>{if(!rec)return;try{const p=await navigator.permissions.query({name:'microphone'});if(p.state==='granted')goOnline();}catch(e){}})();
 function goFull(){document.documentElement.requestFullscreen?.().catch(()=>{});}
 document.getElementById('full').onclick=goFull;
+</script>
+<script type="module">
+/* Links this device with your other one through Firebase (free plan). Anyone with the 10-character code can join, so keep it private. */
+import {initializeApp} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import {getAuth,signInAnonymously} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+import {getFirestore,collection,doc,addDoc,setDoc,deleteDoc,onSnapshot,query,where} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+const app=initializeApp({apiKey:"AIzaSyAOR58tpIDdba6tKGFPngxT7kWI2t9CdBg",authDomain:"jarvis-command-deck.firebaseapp.com",projectId:"jarvis-command-deck",
+  storageBucket:"jarvis-command-deck.firebasestorage.app",messagingSenderId:"1065440050823",appId:"1:1065440050823:web:e9b2c844197c14a0f04222"});
+const auth=getAuth(app),db=getFirestore(app);
+let unsubs=[],signedIn=null;
+function signIn(){if(!signedIn)signedIn=signInAnonymously(auth);return signedIn;}
+const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+
+async function connect(code,isNew,quiet){
+  try{
+    setLink('Linking…');await signIn();
+    unsubs.forEach(u=>u());unsubs=[];
+    room=code;save('deck.room',code);renderPair();
+    const base=['rooms',code];
+    if(isNew){await setDoc(doc(db,...base,'state','notes'),{items:notes,ms:Date.now()});await setDoc(doc(db,...base,'state','timers'),{items:timers,ms:Date.now()});}
+    for(const kind of ['notes','timers']){
+      unsubs.push(onSnapshot(doc(db,...base,'state',kind),snap=>{
+        if(!snap.exists()){window.syncPush(kind,kind==='notes'?notes:timers);return;}
+        const items=snap.data().items||[];
+        if(kind==='notes'&&!same(items,notes)){notes=items;save('deck.notes',notes);renderNotes();}
+        if(kind==='timers'&&!same(items,timers)){timers=items;save('deck.timers',timers);renderTimers();}
+      },()=>setLink('Link error')));
+    }
+    unsubs.push(onSnapshot(query(collection(db,...base,'events'),where('to','==',ME)),snap=>{
+      snap.docChanges().forEach(ch=>{if(ch.type!=='added')return;const ev=ch.doc.data();
+        deleteDoc(ch.doc.ref).catch(()=>{});
+        if(Date.now()-(ev.ms||0)<120000)runRemote(ev);});
+      setLink('Linked');
+    },()=>setLink('Link error')));
+    if(!quiet){if(isNew)say('Pairing code created. Type it on your other device.');else say('Linked. Your devices are connected.');}
+  }catch(e){console.error(e);setLink('Link error');log('Linking failed: '+(e.code||e.message),'ai');}
+}
+window.syncConnect=connect;
+window.syncDisconnect=()=>{unsubs.forEach(u=>u());unsubs=[];room=null;try{localStorage.removeItem('deck.room');}catch(e){}renderPair();setLink('Not linked');say('Unlinked.');};
+window.syncPush=(kind,items)=>{if(!room)return;setDoc(doc(db,'rooms',room,'state',kind),{items,ms:Date.now()}).catch(()=>setLink('Link error'));};
+window.syncSend=(to,payload)=>addDoc(collection(db,'rooms',room,'events'),{...payload,to,from:ME,ms:Date.now()});
+if(room)connect(room,false,true);
 </script>
 </body>
 </html>
